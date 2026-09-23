@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="Bank.WebApi.Tests/Bank.WebApi.Tests.csproj" />
+  <Project Path="Bank.WebApi/Bank.WebApi.csproj" />
+</Solution>

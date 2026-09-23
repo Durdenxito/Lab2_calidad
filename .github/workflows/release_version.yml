@@ -1,0 +1,92 @@
+name: Release NuGet package
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version without the v prefix, for example 1.0.0'
+        required: true
+        type: string
+
+env:
+  DOTNET_VERSION: '10.0.x'
+  PACKAGE_PROJECT: Bank.WebApi/Bank.WebApi.csproj
+  PACKAGE_OUTPUT: ./nupkgs
+
+jobs:
+  release:
+    name: Test, package and release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Select release version
+        shell: bash
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            version="${GITHUB_REF_NAME#v}"
+          else
+            version="$INPUT_VERSION"
+          fi
+
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "Invalid package version: $version"
+            exit 1
+          fi
+
+          echo "PACKAGE_VERSION=$version" >> "$GITHUB_ENV"
+          echo "RELEASE_TAG=v$version" >> "$GITHUB_ENV"
+
+      - name: Restore solution
+        run: dotnet restore Bank2.slnx
+
+      - name: Build solution
+        run: dotnet build Bank2.slnx --configuration Release --no-restore --no-incremental
+
+      - name: Run unit tests
+        run: |
+          dotnet test Bank2.slnx \
+            --configuration Release \
+            --no-build \
+            --logger "trx;LogFileName=test-results.trx"
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: release-test-results
+          path: '**/test-results.trx'
+          if-no-files-found: error
+
+      - name: Pack NuGet package
+        run: |
+          dotnet pack "${PACKAGE_PROJECT}" \
+            --configuration Release \
+            --no-build \
+            --output "${PACKAGE_OUTPUT}" \
+            -p:PackageVersion="${PACKAGE_VERSION}"
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ env.RELEASE_TAG }}
+          PACKAGE_OUTPUT: ${{ env.PACKAGE_OUTPUT }}
+        run: |
+          gh release create "${RELEASE_TAG}" \
+            "${PACKAGE_OUTPUT}"/*.nupkg \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "Release ${RELEASE_TAG}" \
+            --generate-notes

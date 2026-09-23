@@ -1,0 +1,97 @@
+name: Snyk Analysis
+
+env:
+  DOTNET_VERSION: '10.0.x'
+
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Setup Snyk
+        uses: snyk/actions/setup@9adf32b1121593767fc3c057af55b55db032dc04
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Snyk Code test
+        continue-on-error: true
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        run: snyk code test --json > snyk-code.sarif
+
+      - name: Generate Snyk Code HTML report
+        if: always()
+        run: |
+          python - <<'PY'
+          import html
+          import json
+
+          with open("snyk-code.sarif", encoding="utf-8") as source:
+              sarif = json.load(source)
+
+          rows = []
+          for run in sarif.get("runs", []):
+              for result in run.get("results", []):
+                  location = (result.get("locations") or [{}])[0]
+                  physical = location.get("location", {}).get("physicalLocation", {})
+                  artifact = physical.get("artifactLocation", {}).get("uri", "")
+                  region = physical.get("region", {})
+                  rows.append(
+                      "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}:{}</td></tr>".format(
+                          html.escape(result.get("ruleId", "")),
+                          html.escape(result.get("level", "")),
+                          html.escape(result.get("message", {}).get("text", "")),
+                          html.escape(artifact),
+                          region.get("startLine", ""),
+                      )
+                  )
+
+          body = "".join(rows) or '<tr><td colspan="4">No se detectaron vulnerabilidades.</td></tr>'
+          document = """<!doctype html>
+          <html lang="es"><head><meta charset="utf-8"><title>Snyk Code Report</title>
+          <style>body{font-family:system-ui;margin:2rem}table{border-collapse:collapse;width:100%}th,td{border:1px solid #ccc;padding:.5rem;text-align:left}th{background:#eee}</style>
+          </head><body><h1>Snyk Code Report</h1><table><thead><tr><th>Regla</th><th>Nivel</th><th>Mensaje</th><th>Ubicación</th></tr></thead><tbody>""" + body + "</tbody></table></body></html>"
+          with open("snyk-code.html", "w", encoding="utf-8") as report:
+              report.write(document)
+          PY
+
+      - name: Build container image
+        env:
+          IMAGE_TAG: api-banco:${{ github.sha }}
+        run: docker build -t "$IMAGE_TAG" .
+
+      - name: Snyk container test
+        if: always()
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+          IMAGE_TAG: api-banco:${{ github.sha }}
+        run: |
+          set +e
+          snyk container test "$IMAGE_TAG" --json > snyk-container.json
+          set -e
+          npm install --global --ignore-scripts snyk-to-html@3.7.9
+          snyk-to-html -i snyk-container.json -o snyk-container.html
+          exit 0
+
+      - name: Upload Snyk reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: snyk-html-reports
+          path: |
+            snyk-code.html
+            snyk-container.html
+          if-no-files-found: error

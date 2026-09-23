@@ -1,0 +1,107 @@
+name: Test, SonarCloud and Package
+
+env:
+  DOTNET_VERSION: '10.0.x'
+  SONAR_ORG: durdenxito
+  SONAR_PROJECT: Durdenxito_Lab01_Calidadddd
+  PACKAGE_PROJECT: Bank.WebApi/Bank.WebApi.csproj
+  PACKAGE_OUTPUT: ./nupkgs
+
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+
+jobs:
+  quality-and-package:
+    name: Tests, SonarCloud and NuGet package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    env:
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+      GITHUB_TOKEN: ${{ github.token }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 0
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Setup Java
+        uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Install SonarScanner
+        run: dotnet tool install --global dotnet-sonarscanner --version 11.3.0
+
+      - name: Restore solution
+        run: dotnet restore Bank2.slnx
+
+      - name: Begin SonarCloud analysis
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: |
+          dotnet-sonarscanner begin \
+            /k:"${SONAR_PROJECT}" \
+            /o:"${SONAR_ORG}" \
+            /d:sonar.token="${SONAR_TOKEN}" \
+            /d:sonar.host.url="https://sonarcloud.io" \
+            /d:sonar.cs.opencover.reportsPaths="**/coverage.opencover.xml" \
+            /d:sonar.qualitygate.wait=true
+
+      - name: Build solution
+        run: dotnet build Bank2.slnx --no-restore --no-incremental
+
+      - name: Run unit tests with coverage
+        run: |
+          dotnet test Bank2.slnx \
+            --no-build \
+            --logger "trx;LogFileName=test-results.trx" \
+            --collect "XPlat Code Coverage" \
+            --settings coverage.runsettings
+
+      - name: Upload test and coverage reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: test-and-coverage-reports
+          path: |
+            **/test-results.trx
+            **/coverage.opencover.xml
+          if-no-files-found: error
+
+      - name: Finish SonarCloud analysis
+        if: always()
+        run: dotnet-sonarscanner end /d:sonar.token="${SONAR_TOKEN}"
+
+      - name: Pack Bank.WebApi
+        run: |
+          dotnet pack "${PACKAGE_PROJECT}" \
+            --configuration Release \
+            --no-restore \
+            --output "${PACKAGE_OUTPUT}" \
+            -p:PackageVersion="1.0.${GITHUB_RUN_NUMBER}"
+
+      - name: Upload NuGet package artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: bank-web-api-package
+          path: "${{ env.PACKAGE_OUTPUT }}/*.nupkg"
+          if-no-files-found: error
+
+      - name: Publish package to GitHub Packages
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          dotnet nuget push ${PACKAGE_OUTPUT}/*.nupkg \
+            --source "https://nuget.pkg.github.com/${GITHUB_REPOSITORY_OWNER}/index.json" \
+            --api-key "${GITHUB_TOKEN}" \
+            --skip-duplicate

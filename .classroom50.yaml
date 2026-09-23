@@ -1,0 +1,12 @@
+schema: "classroom50/repo-config/v1"
+classroom: "si784-2026-ii"
+assignment: "si784-2026-ii-lab02"
+owner:
+  username: "Durdenxito"
+  id: 159724098
+  accepted_at: "2026-09-21T09:13:54Z"
+source:
+  owner: "UPT-FAING-EPIS"
+  owner_id: 85908869
+  repo: "lab_calidad_02"
+  branch: "main"
